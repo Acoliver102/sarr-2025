@@ -6,6 +6,21 @@
 */
 #include <Servo.h>
 
+// constants - receiver channels
+const int CH_1_PIN = 12;
+const int CH_2_PIN = 11;
+const int CH_3_PIN = 10;
+const int CH_4_PIN = 9;
+const int CH_5_PIN = 8;
+const int CH_6_PIN = 7;
+
+// constants - motor controller channels
+const int R_SERVO_PIN = 2;
+const int L_SERVO_PIN = 1;
+
+// constant - wheel velocity scalar
+const float WHEEL_V_K = 0.5;
+
 // Create Variables to hold the Receiver signals
 int Ch1, Ch2, Ch3, Ch4, Ch5, Ch6;
 int Rwheel;               // Variable to hold R wheel speed 
@@ -29,16 +44,16 @@ Servo R_Servo;  // Servo DC Motor Driver (Designed for RC cars)
 //**************************************************************
 void setup() {
   // Set the pins that the transmitter will be connected to all to input
-  pinMode(12, INPUT); //I connected this to Chan1 of the Receiver
-  pinMode(11, INPUT); //I connected this to Chan2 of the Receiver
-  pinMode(10, INPUT); //I connected this to Chan3 of the Receiver
-  pinMode(9, INPUT); //I connected this to Chan4 of the Receiver
-  pinMode(8, INPUT); //I connected this to Chan5 of the Receiver
-  pinMode(7, INPUT); //I connected this to Chan6 of the Receiver
+  pinMode(CH_1_PIN, INPUT); //I connected this to Chan1 of the Receiver
+  pinMode(CH_2_PIN, INPUT); //I connected this to Chan2 of the Receiver
+  pinMode(CH_3_PIN, INPUT); //I connected this to Chan3 of the Receiver
+  pinMode(CH_4_PIN, INPUT); //I connected this to Chan4 of the Receiver
+  pinMode(CH_5_PIN, INPUT); //I connected this to Chan5 of the Receiver
+  pinMode(CH_6_PIN, INPUT); //I connected this to Chan6 of the Receiver
   pinMode(LED, OUTPUT);//Onboard LED to output for diagnostics
 // Attach Speed controller that acts like a servo to the board
-  R_Servo.attach(2); //Pin 2
-  L_Servo.attach(1); //Pin 1
+  R_Servo.attach(R_SERVO_PIN); //Pin 2
+  L_Servo.attach(L_SERVO_PIN); //Pin 1
   rSpeed = 1450;
   lSpeed = 1620;
   //Flash the LED on and Off 10x before entering main loop
@@ -56,12 +71,12 @@ void setup() {
 //**************************************************************
 void loop()
 {
-  //  Ch1 = pulseIn(12, HIGH, 21000); // Capture pulse width on Channel 1
-  //  Ch2 = pulseIn(11, HIGH, 21000); // Capture pulse width on Channel 2
-  //  Ch3 = pulseIn(10, HIGH, 21000);  // Capture pulse width on Channel 3
-  //  Ch4 = pulseIn(9, HIGH, 21000);  // Capture pulse width on Channel 4
-  //  Ch5 = pulseIn(8, HIGH, 21000); // Capture pulse width on Channel 5
-  //  Ch6 = pulseIn(7, HIGH, 21000); // Capture pulse width on Channel 6
+  //  Ch1 = pulseIn(CH_1_PIN, HIGH, 21000); // Capture pulse width on Channel 1
+  //  Ch2 = pulseIn(CH_2_PIN, HIGH, 21000); // Capture pulse width on Channel 2
+  //  Ch3 = pulseIn(CH_3_PIN, HIGH, 21000);  // Capture pulse width on Channel 3
+  //  Ch4 = pulseIn(CH_4_PIN, HIGH, 21000);  // Capture pulse width on Channel 4
+  //  Ch5 = pulseIn(CH_5_PIN, HIGH, 21000); // Capture pulse width on Channel 5
+  //  Ch6 = pulseIn(CH_6_PIN, HIGH, 21000); // Capture pulse width on Channel 6
   //
   //  TestWheels();
   //  fowardSlow();
@@ -83,10 +98,10 @@ void Ch5Check() {
    
   }
   else {
-    Ch1 = pulseIn(12, HIGH, 21000); // Capture pulse width on Channel 1
-    Ch2 = pulseIn(11, HIGH, 21000); // Capture pulse width on Channel 2
-    Ch3 = pulseIn(10, HIGH, 21000);  // Capture pulse width on Channel 3
-    Ch4 = pulseIn(9, HIGH, 21000);  // Capture pulse width on Channel 4
+    Ch1 = pulseIn(CH_1_PIN, HIGH, 21000); // Capture pulse width on Channel 1
+    Ch2 = pulseIn(CH_2_PIN, HIGH, 21000); // Capture pulse width on Channel 2
+    Ch3 = pulseIn(CH_3_PIN, HIGH, 21000);  // Capture pulse width on Channel 3
+    Ch4 = pulseIn(CH_4_PIN, HIGH, 21000);  // Capture pulse width on Channel 4
     digitalWrite(LED, LOW);
     DriveServosRC();
   }
@@ -95,16 +110,28 @@ void Ch5Check() {
 //********************** Autonomous Mode   **********************
 //**************************************************************
 void autonomous() {
+  // update sensor values
   checkSensors();
+
+  // slow L turn to light
   while (lPhotoVal > 1000) {
     TLeftSlow(1500, 1);
     checkSensors();
-    Ch5Check();
+
+    // if close to wall, stop and exit autonomous
+    if (sharpVal >= 400) {
+      stopBot(100);
+      break;
+    }
+
+    // if exit auto mode on controller, exit autonomous
+    Ch5 = pulseIn(8, HIGH, 21000);
     if (Ch5 < 1600) {
       break;
     }
   }
 
+  // check
   if (valDif > 70) {
     if (lPhotoVal > rPhotoVal) {
       rSpeed = rSpeed + 5;
@@ -253,9 +280,6 @@ void checkSensors()
     sharpVal = sharpVal + analogRead(sharpPin);
   }
   sharpVal = sharpVal / 5;
-  if (sharpVal >= 400) {//changed from 500
-    stopBot(100);
-  }
 }
 //******************** printSensors() **************************
 // Print the sensor values  Slows robot when in use!!!
