@@ -191,8 +191,13 @@ void pulseMotors() {
   //un-comment the next two to map a control range.
   //*** Take the standard range of 1000 to 2000 and frame it to your own minimum and maximum
   //*** for each wheel.
-  Rwheel = map(Rwheel, 1000, 2000, 1000, 2000);
-  Lwheel = map(Lwheel, 1000, 2000, 1000, 2000);
+
+  // scale lower and upper bounds from constant file
+  int lower_bound = 1500 - int(WHEEL_V_K * 500);
+  int upper_bound = 1500 + int(WHEEL_V_K * 500);
+
+  Rwheel = map(Rwheel, 1000, 2000, lower_bound, upper_bound);
+  Lwheel = map(Lwheel, 1000, 2000, lower_bound, upper_bound);
   R_Servo.writeMicroseconds(Rwheel);
   L_Servo.writeMicroseconds(Lwheel);
 
@@ -222,6 +227,14 @@ void DriveServosRC()
     PrintRC();
   }
 }
+
+// directly pass a request to the left and right wheels for specified duration
+void driveForDuration(int leftReq, int rightReq, int duration_ms) {
+  L_Servo.writeMicroseconds(leftReq);
+  R_Servo.writeMicroseconds(rightReq);
+  delay(duration_ms);
+}
+
 //*****************  Forward(int Dlay)   ***********************
 //              Move the robot Slowly Forward
 //**************************************************************
