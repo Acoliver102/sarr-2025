@@ -36,7 +36,9 @@ const double RC_DEADZONE_PCT = 0.06;
 // constants - peripheral pins
 const int L_PHOTO_PIN = A1;    // Left Photoresistor
 const int R_PHOTO_PIN = A0;    // Right Photoresistor
-const int SHARP_PIN = A2;  // Sharp Sensor
+const int M_SHARP_PIN = A2;  // Sharp Sensor
+const int L_SHARP_PIN = A3;  // Sharp Sensor
+const int R_SHARP_PIN = A4;  // Sharp Sensor
 const int LED = 13;       // Onboard LED location
 
 // constants - CdS Photosensor Tuning
@@ -67,10 +69,10 @@ double clamp(double in, double min, double max) {
 }
 
 // rolling avg sharp sensor readout - from Brian
-int getSharpVal() {
-    int total = analogRead(SHARP_PIN);
+int getSharpVal(int sharp_pin) {
+    int total = analogRead(sharp_pin);
     for (int i = 0; i <= 3; i++) {
-        total = total + analogRead(SHARP_PIN);
+        total = total + analogRead(sharp_pin);
     }
     
     // return 5-frame rolling average
@@ -159,7 +161,7 @@ void printRC()
 enum RobotMode {
     DISABLED = 0,
     TELEOP = 1,
-    AUTON = 2
+    NAV_BRIDGE_LIGHT = 2
 };
 
 enum RobotMode g_robotMode = DISABLED;
@@ -171,7 +173,10 @@ void updateRobotMode() {
         g_robotMode = DISABLED;
         digitalWrite(LED, LOW);
     } else if (getRShoulderSwitchIn()) {
-        g_robotMode = AUTON;
+        // if robot state is not an auto state, go to first auto state
+        if ((g_robotMode == DISABLED) || (g_robotMode == TELEOP)) {
+            g_robotMode = NAV_BRIDGE_LIGHT;
+        }
         digitalWrite(LED, HIGH);
     } else {
         g_robotMode = TELEOP;
@@ -307,13 +312,12 @@ void loop() {
             // teleop main loop
             teleop();
             break;
-        case 2: // AUTON
+        case 2: // NAV_BRIDGE_LIGHT
             #if (MODE_DEBUG == 1)
-            Serial.println("AUTON");
+            Serial.println("NAV_BRIDGE_LIGHT");
             #endif
 
-            // main auton command
-            autonomous();
+            navBridgeLight();
             break;
     }
 
@@ -323,42 +327,30 @@ void teleop() {
     drive.driveArcade(getRStickYPct(), -getRStickXPct());
 }
 
-void autonomous() {
-    // check if auto is flagged as complete yet
-    bool isDone = false;
-
-    while (!isDone) {
-        // check robotMode at beginning of each loop
-        updateRobotMode();
-
-        // exit autonomous() INSTANTLY if not in auto mode any more
-        if (g_robotMode != AUTON) {
-            return;
-        }
-
-        // stop when near walls
-        if (getSharpVal() > SHARP_VAL_MAX) {
-            drive.driveTank(0, 0);
-            isDone = true;
-            break;
-        }
-
+// helper function to handle navigate to light tasks
+void goToLight() {
+    if (getRPhotoVal() > PHOTO_VAL_START_THRESH) {
         // slow turn to find target
-        if (getRPhotoVal() > PHOTO_VAL_START_THRESH) {
-            drive.driveArcade(0, 0.2);
+        drive.driveArcade(0, 0.2);
+    } else {
+        // drive towards target, proportional turn
+        int error = getPhotoValDifference() - PHOTO_VAL_DIFF_TARGET;
+        if (abs(error) > PHOTO_VAL_TARGET_THRESH) {
+            drive.driveArcade(0, PHOTO_STEER_kP * error);
         } else {
-            int error = getPhotoValDifference() - PHOTO_VAL_DIFF_TARGET;
-            if (abs(error) > PHOTO_VAL_TARGET_THRESH) {
-                drive.driveArcade(0, PHOTO_STEER_kP * error);
-            } else {
-                drive.driveArcade(0.225, PHOTO_STEER_kP * error);
-            }
+            drive.driveArcade(0.225, PHOTO_STEER_kP * error);
         }
-
     }
+}
 
-    Serial.println("Autonomous completed!");
-    drive.driveTank(0, 0);
-    delay(10000);
+void navBridgeLight() {
+    // main command: go to bridge light
+    goToLight();
 
+    // stop when near walls and go to next state
+    if (getSharpVal(M_SHARP_PIN) > SHARP_VAL_MAX) {
+        Serial.println("Autonomous completed!");
+        drive.driveTank(0, 0);
+        g_robotMode = DISABLED;
+    }
 }
