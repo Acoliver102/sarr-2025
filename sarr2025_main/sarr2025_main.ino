@@ -170,10 +170,12 @@ enum RobotMode {
     DISABLED = 0,
     TELEOP = 1,
     NAV_BRIDGE_LIGHT = 2,
+    CROSS_BRIDGE = 3,
     NAV_CHUTE = 4
 };
 
 enum RobotMode g_robotMode = DISABLED;
+enum RobotMode g_lastRobotMode = DISABLED;
 
 // helper to keep robotMode up to date
 void updateRobotMode() {
@@ -184,7 +186,7 @@ void updateRobotMode() {
     } else if (getRShoulderSwitchIn()) {
         // if robot state is not an auto state, go to first auto state
         if ((g_robotMode == DISABLED) || (g_robotMode == TELEOP)) {
-            g_robotMode = NAV_CHUTE;
+            g_robotMode = NAV_BRIDGE_LIGHT;
         }
         digitalWrite(LED, HIGH);
     } else {
@@ -270,6 +272,41 @@ void DifferentialDrive::driveArcade(double fwd_pct, double rot_pct) {
 // DifferentialDrive subsystem
 DifferentialDrive drive (L_SERVO_PIN, R_SERVO_PIN);
 
+// Timer helper class for auto modes
+// consolidate a bunch of global variables into one 
+class Timer {
+    private:
+        long _startTime;
+    public:
+        Timer();
+        void reset();
+        double secondsElapsed();
+        boolean hasElapsed(double seconds);
+};
+
+// set start time on initialization
+Timer::Timer() {
+    _startTime = millis();
+}
+
+// reset _startTime
+void Timer::reset() {
+    _startTime = millis();
+}
+
+// return time since _startTime
+double Timer::secondsElapsed() {
+    return double(millis() - _startTime)/1000.0;
+}
+
+// check if certain time has elapsed
+boolean Timer::hasElapsed(double seconds) {
+    return (double(millis() - _startTime)/1000.0) > seconds;
+}
+
+// global timers
+Timer g_bridgeDriveTimer;
+
 // **************************************************************************
 // ROBOT CODE
 // **************************************************************************
@@ -326,6 +363,13 @@ void loop() {
 
             navBridgeLight();
             break;
+        case 3: // CROSS_BRIDGE
+            #if (MODE_DEBUG == 1)
+            Serial.println("CROSS_BRIDGE");
+            #endif
+
+            crossBridge();
+            break;
         case 4: // NAV_CHUTE
             #if (MODE_DEBUG == 1)
             Serial.println("NAV_CHUTE");
@@ -335,6 +379,9 @@ void loop() {
             break;
     }
 
+    // after handling action update last robot mode for logic
+    g_lastRobotMode = g_robotMode;
+
 }
 
 void teleop() {
@@ -343,7 +390,7 @@ void teleop() {
 
 // helper function to handle navigate to light tasks
 void goToLight(int start_thresh) {
-    if ((getRPhotoVal() > start_thresh) && (getLPhotoVal() > start_thresh)) {
+    if (getRPhotoVal() > start_thresh) {
         // slow turn to find target
         drive.driveArcade(0, 0.2);
     } else {
@@ -368,6 +415,20 @@ void navBridgeLight() {
         g_robotMode = DISABLED;
         delay(5000);
     }
+}
+
+void crossBridge() {
+    // reset timer on first call
+    if (g_lastRobotMode != g_robotMode) {
+        g_bridgeDriveTimer.reset();
+    }
+
+    if (g_bridgeDriveTimer.hasElapsed(3)) {
+        drive.driveTank(0, 0);
+    } else {
+        drive.driveArcade(0.5, 0.0);
+    }
+
 }
 
 void navChute() {
