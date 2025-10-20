@@ -51,11 +51,19 @@ const int SHARP_VAL_MAX = 600; // max distance sensor value before stopping
 const int PHOTO_VAL_DIFF_TARGET = -50; // target sensor delta
 const int PHOTO_VAL_TARGET_THRESH = 50; // min difference to start driving forward 
 const int PHOTO_VAL_START_THRESH = -300; // intensity before starting homing
-const double PHOTO_STEER_kP = 0.4/150; // kP for steering controller
+const double PHOTO_STEER_kP = 0.2/150; // kP for steering controller
+
+// bridge auto segmaent
+const int BRIDGE_START_THRESH = -100; // intensity before starting homing
+const int BRIDGE_SHARP_MAX = 150; // max distance sensor readout before moving z
+
+// chute nav constants
+const int L_SHARP_CHUTE_THRESH = 300;
+const int R_SHARP_CHUTE_THRESH = 300;
 
 // **************************************************************************
 // HELPER FUNCTIONS
-// **************************************************************************
+// ***************************************E**********************************
 
 // simple clamping function
 double clamp(double in, double min, double max) {
@@ -161,7 +169,8 @@ void printRC()
 enum RobotMode {
     DISABLED = 0,
     TELEOP = 1,
-    NAV_BRIDGE_LIGHT = 2
+    NAV_BRIDGE_LIGHT = 2,
+    NAV_CHUTE = 4
 };
 
 enum RobotMode g_robotMode = DISABLED;
@@ -175,7 +184,7 @@ void updateRobotMode() {
     } else if (getRShoulderSwitchIn()) {
         // if robot state is not an auto state, go to first auto state
         if ((g_robotMode == DISABLED) || (g_robotMode == TELEOP)) {
-            g_robotMode = NAV_BRIDGE_LIGHT;
+            g_robotMode = NAV_CHUTE;
         }
         digitalWrite(LED, HIGH);
     } else {
@@ -292,9 +301,6 @@ void setup() {
 void loop() {
     updateRobotMode();
 
-    Serial.print("Photo net sensor read: ");
-    Serial.println(getPhotoValDifference());
-
     switch (g_robotMode) {
         case 0: // DISABLED
             #if (MODE_DEBUG == 1)
@@ -311,6 +317,7 @@ void loop() {
 
             // teleop main loop
             teleop();
+
             break;
         case 2: // NAV_BRIDGE_LIGHT
             #if (MODE_DEBUG == 1)
@@ -318,6 +325,13 @@ void loop() {
             #endif
 
             navBridgeLight();
+            break;
+        case 4: // NAV_CHUTE
+            #if (MODE_DEBUG == 1)
+            Serial.println("NAV_CHUTE");
+            #endif
+
+            navChute();
             break;
     }
 
@@ -328,8 +342,8 @@ void teleop() {
 }
 
 // helper function to handle navigate to light tasks
-void goToLight() {
-    if (getRPhotoVal() > PHOTO_VAL_START_THRESH) {
+void goToLight(int start_thresh) {
+    if ((getRPhotoVal() > start_thresh) && (getLPhotoVal() > start_thresh)) {
         // slow turn to find target
         drive.driveArcade(0, 0.2);
     } else {
@@ -338,19 +352,32 @@ void goToLight() {
         if (abs(error) > PHOTO_VAL_TARGET_THRESH) {
             drive.driveArcade(0, PHOTO_STEER_kP * error);
         } else {
-            drive.driveArcade(0.225, PHOTO_STEER_kP * error);
+            drive.driveArcade(0.275, PHOTO_STEER_kP * error);
         }
     }
 }
 
 void navBridgeLight() {
     // main command: go to bridge light
-    goToLight();
+    goToLight(BRIDGE_START_THRESH);
 
     // stop when near walls and go to next state
-    if (getSharpVal(M_SHARP_PIN) > SHARP_VAL_MAX) {
+    if (getSharpVal(L_SHARP_PIN) + getSharpVal(R_SHARP_PIN) > SHARP_VAL_MAX) {
         Serial.println("Autonomous completed!");
         drive.driveTank(0, 0);
         g_robotMode = DISABLED;
+        delay(5000);
+    }
+}
+
+void navChute() {
+    if (getSharpVal(L_SHARP_PIN) > L_SHARP_CHUTE_THRESH) {
+        drive.driveArcade(0.125, -0.3);
+        delay(400);
+    } else if (getSharpVal(R_SHARP_PIN) > R_SHARP_CHUTE_THRESH) {
+        drive.driveArcade(0.125, 0.3);
+        delay(400);
+    } else {
+        drive.driveArcade(0.3, 0);
     }
 }
