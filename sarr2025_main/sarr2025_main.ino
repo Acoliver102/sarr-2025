@@ -4,19 +4,20 @@
 // debug flags
 #define MODE_DEBUG 0
 #define DRIVE_DEBUG 0
-#define PHOTO_DEBUG 1
+#define PHOTO_DEBUG 0
 
 // constants - receiver channels
-const int CH_1_PIN = 12;
-const int CH_2_PIN = 11;
-const int CH_3_PIN = 10;
-const int CH_4_PIN = 9;
-const int CH_5_PIN = 8;
-const int CH_6_PIN = 7;
+const int CH_1_PIN = 7;
+const int CH_2_PIN = 8;
+const int CH_3_PIN = 9;
+const int CH_4_PIN = 10;
+const int CH_5_PIN = 11;
+const int CH_6_PIN = 12;
 
 // constants - motor controller channels
-const int L_SERVO_PIN = 1;
-const int R_SERVO_PIN = 2;
+const int L_SERVO_PIN = 2;
+const int R_SERVO_PIN = 1;
+const int ARM_SERVO_PIN = 3;
 
 // constants - motor inversions
 const bool L_MOTOR_INVERTED = true; 
@@ -34,32 +35,34 @@ const int RC_IN_AMP = 500;
 const double RC_DEADZONE_PCT = 0.06;
 
 // constants - peripheral pins
-const int L_PHOTO_PIN = A1;    // Left Photoresistor
-const int R_PHOTO_PIN = A0;    // Right Photoresistor
+const int L_PHOTO_PIN = A0;    // Left Photoresistor
+const int R_PHOTO_PIN = A1;    // Right Photoresistor
 const int M_SHARP_PIN = A2;  // Sharp Sensor
 const int L_SHARP_PIN = A3;  // Sharp Sensor
 const int R_SHARP_PIN = A4;  // Sharp Sensor
 const int LED = 13;       // Onboard LED location
 
 // constants - CdS Photosensor Tuning
-const int L_PHOTO_DEFAULT = 260;
-const int R_PHOTO_DEFAULT = 600;
-const double L_TO_R_SCALE = 67/24; // empirical - tune out differences in voltage dividers
+const int L_PHOTO_DEFAULT = 457;
+const int R_PHOTO_DEFAULT = 514;
+const double L_TO_R_SCALE = 499.0/436.0; // empirical - tune out differences in voltage dividers
 
 // auton parameter constants
 const int SHARP_VAL_MAX = 600; // max distance sensor value before stopping
 const int PHOTO_VAL_DIFF_TARGET = -50; // target sensor delta
 const int PHOTO_VAL_TARGET_THRESH = 50; // min difference to start driving forward 
 const int PHOTO_VAL_START_THRESH = -300; // intensity before starting homing
-const double PHOTO_STEER_kP = 0.2/150; // kP for steering controller
+const double PHOTO_STEER_kP = 0.3/150; // kP for steering controller
 
 // bridge auto segmaent
-const int BRIDGE_START_THRESH = -100; // intensity before starting homing
+const int BRIDGE_START_THRESH = -250; // intensity before starting homing
 const int BRIDGE_SHARP_MAX = 150; // max distance sensor readout before moving z
 
 // chute nav constants
 const int L_SHARP_CHUTE_THRESH = 300;
 const int R_SHARP_CHUTE_THRESH = 300;
+
+Servo g_armServo;
 
 // **************************************************************************
 // HELPER FUNCTIONS
@@ -134,6 +137,16 @@ double getRStickYPct() {
     return rawValue;
 }
 
+double getLStickXPct() {
+    double rawValue = double(int(pulseIn(CH_4_PIN, HIGH, 21000)) - RC_IN_CENTER) / RC_IN_AMP;
+
+    if (abs(rawValue) < RC_DEADZONE_PCT) {
+        return 0.0;
+    }
+
+    return rawValue;
+}
+
 // return whether or not the shoulder switches are pushed out
 bool getLShoulderSwitchIn() {
     return (pulseIn(CH_6_PIN, HIGH, 21000) > 1600);
@@ -159,6 +172,17 @@ void printRC()
     Serial.print("Value Ch6 = ");
     Serial.println(pulseIn(CH_6_PIN, HIGH, 21000));
     delay(400);
+}
+
+void driveArmPct(double drive_pct) {
+    drive_pct = clamp(drive_pct, -1 , 1);
+
+    g_armServo.writeMicroseconds(MOTOR_PWM_CENTER + int(MOTOR_PWM_AMP * drive_pct));
+
+    #if (DRIVE_DEBUG == 1)
+    Serial.print("ARM Motor PWM Request: ");
+    Serial.println(MOTOR_PWM_CENTER + int(MOTOR_PWM_AMP * drive_pct));
+    #endif
 }
 
 // **************************************************************************
@@ -324,6 +348,9 @@ void setup() {
     // init drive subsystem
     drive.init();
 
+    // init arm
+    g_armServo.attach(ARM_SERVO_PIN);
+
     //Flash the LED on and Off 10x before entering main loop
     for (int i = 0; i < 10; i++) {
         digitalWrite(13, HIGH);
@@ -338,14 +365,18 @@ void setup() {
 void loop() {
     updateRobotMode();
 
+    getLPhotoVal();
+    getRPhotoVal();
+
     switch (g_robotMode) {
         case 0: // DISABLED
             #if (MODE_DEBUG == 1)
             Serial.println("DISABLED");
             #endif
 
-            // turn off chassis
+            // turn off chassis and arm
             drive.driveTank(0, 0);
+            driveArmPct(0.0);
             break;
         case 1: // TELEOP
             #if (MODE_DEBUG == 1)
@@ -386,20 +417,21 @@ void loop() {
 
 void teleop() {
     drive.driveArcade(getRStickYPct(), -getRStickXPct());
+    driveArmPct(getLStickXPct());
 }
 
 // helper function to handle navigate to light tasks
 void goToLight(int start_thresh) {
     if (getRPhotoVal() > start_thresh) {
         // slow turn to find target
-        drive.driveArcade(0, 0.2);
+        drive.driveArcade(0, 0.3);
     } else {
         // drive towards target, proportional turn
         int error = getPhotoValDifference() - PHOTO_VAL_DIFF_TARGET;
         if (abs(error) > PHOTO_VAL_TARGET_THRESH) {
             drive.driveArcade(0, PHOTO_STEER_kP * error);
         } else {
-            drive.driveArcade(0.275, PHOTO_STEER_kP * error);
+            drive.driveArcade(0.3, PHOTO_STEER_kP * error);
         }
     }
 }
@@ -408,13 +440,13 @@ void navBridgeLight() {
     // main command: go to bridge light
     goToLight(BRIDGE_START_THRESH);
 
-    // stop when near walls and go to next state
-    if (getSharpVal(L_SHARP_PIN) + getSharpVal(R_SHARP_PIN) > SHARP_VAL_MAX) {
-        Serial.println("Autonomous completed!");
-        drive.driveTank(0, 0);
-        g_robotMode = DISABLED;
-        delay(5000);
-    }
+    // // stop when near walls and go to next state
+    // if (getSharpVal(L_SHARP_PIN) + getSharpVal(R_SHARP_PIN) > SHARP_VAL_MAX) {
+    //     Serial.println("Autonomous completed!");
+    //     drive.driveTank(0, 0);
+    //     g_robotMode = DISABLED;
+    //     delay(5000);
+    // }
 }
 
 void crossBridge() {
