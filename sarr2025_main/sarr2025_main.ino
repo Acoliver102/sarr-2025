@@ -5,6 +5,7 @@
 #define MODE_DEBUG 0
 #define DRIVE_DEBUG 0
 #define PHOTO_DEBUG 0
+#define SHARP_DEBUG 1
 
 // constants - receiver channels
 const int CH_1_PIN = 7;
@@ -37,9 +38,9 @@ const double RC_DEADZONE_PCT = 0.06;
 // constants - peripheral pins
 const int L_PHOTO_PIN = A0;    // Left Photoresistor
 const int R_PHOTO_PIN = A1;    // Right Photoresistor
-const int M_SHARP_PIN = A2;  // Sharp Sensor
-const int L_SHARP_PIN = A3;  // Sharp Sensor
-const int R_SHARP_PIN = A4;  // Sharp Sensor
+const int M_SHARP_PIN = A7;  // Sharp Sensor
+const int L_SHARP_PIN = A8 ;  // Sharp Sensor
+const int R_SHARP_PIN = A9;  // Sharp Sensor
 const int LED = 13;       // Onboard LED location
 
 // constants - CdS Photosensor Tuning
@@ -48,7 +49,7 @@ const int R_PHOTO_DEFAULT = 514;
 const double L_TO_R_SCALE = 499.0/436.0; // empirical - tune out differences in voltage dividers
 
 // auton parameter constants
-const int SHARP_VAL_MAX = 600; // max distance sensor value before stopping
+const int SHARP_VAL_MAX = 400; // max distance sensor value before stopping
 const int PHOTO_VAL_DIFF_TARGET = -50; // target sensor delta
 const int PHOTO_VAL_TARGET_THRESH = 50; // min difference to start driving forward 
 const int PHOTO_VAL_START_THRESH = -300; // intensity before starting homing
@@ -59,8 +60,9 @@ const int BRIDGE_START_THRESH = -250; // intensity before starting homing
 const int BRIDGE_SHARP_MAX = 150; // max distance sensor readout before moving z
 
 // chute nav constants
-const int L_SHARP_CHUTE_THRESH = 300;
-const int R_SHARP_CHUTE_THRESH = 300;
+const int L_SHARP_CHUTE_THRESH = 250;
+const int R_SHARP_CHUTE_THRESH = 210;
+const double CHUTE_kP = 0.00025;
 
 Servo g_armServo;
 
@@ -80,14 +82,21 @@ double clamp(double in, double min, double max) {
 }
 
 // rolling avg sharp sensor readout - from Brian
-int getSharpVal(int sharp_pin) {
-    int total = analogRead(sharp_pin);
-    for (int i = 0; i <= 3; i++) {
+double getSharpVal(int sharp_pin) {
+    int total = 0.0;
+    for (int i = 0; i < 25; i++) {
         total = total + analogRead(sharp_pin);
     }
+
+    #if (SHARP_DEBUG == 1)
+    Serial.print("Pin Val - ");
+    Serial.print(sharp_pin);
+    Serial.print(": ");
+    Serial.println(total / 25.0);
+    #endif
     
     // return 5-frame rolling average
-    return total / 5;
+    return total / 25.0;
 }
 
 int getRPhotoVal() {
@@ -195,7 +204,11 @@ enum RobotMode {
     TELEOP = 1,
     NAV_BRIDGE_LIGHT = 2,
     CROSS_BRIDGE = 3,
-    NAV_CHUTE = 4
+    NAV_CHUTE = 4,
+    BREACH_WALL = 5,
+    NAV_BUCKET = 6,
+    PLACE_MEDKIT = 7,
+    AUTO_FINISHED = 99
 };
 
 enum RobotMode g_robotMode = DISABLED;
@@ -210,7 +223,7 @@ void updateRobotMode() {
     } else if (getRShoulderSwitchIn()) {
         // if robot state is not an auto state, go to first auto state
         if ((g_robotMode == DISABLED) || (g_robotMode == TELEOP)) {
-            g_robotMode = NAV_BRIDGE_LIGHT;
+            g_robotMode = NAV_CHUTE;
         }
         digitalWrite(LED, HIGH);
     } else {
@@ -330,6 +343,7 @@ boolean Timer::hasElapsed(double seconds) {
 
 // global timers
 Timer g_bridgeDriveTimer;
+Timer g_breachDriveTimer;
 
 // **************************************************************************
 // ROBOT CODE
@@ -348,6 +362,11 @@ void setup() {
     // init drive subsystem
     drive.init();
 
+    // set sharp pins to input
+    pinMode(R_SHARP_PIN, INPUT);
+    pinMode(L_SHARP_PIN, INPUT);
+    pinMode(M_SHARP_PIN, INPUT);
+
     // init arm
     g_armServo.attach(ARM_SERVO_PIN);
 
@@ -364,9 +383,7 @@ void setup() {
 
 void loop() {
     updateRobotMode();
-
-    getLPhotoVal();
-    getRPhotoVal();
+    
 
     switch (g_robotMode) {
         case 0: // DISABLED
@@ -407,6 +424,27 @@ void loop() {
             #endif
 
             navChute();
+            break;
+        case 5:
+            #if (MODE_DEBUG == 1)
+            Serial.println("BREACH_WALL");
+            #endif
+
+            breachWall();
+            break;
+        case 6:
+            #if (MODE_DEBUG == 1)
+            Serial.println("NAV_BUCKET");
+            #endif
+
+            navBucket();
+            break;
+        case 7:
+            #if (MODE_DEBUG == 1)
+            Serial.println("PLACE_MEDKIT");
+            #endif
+
+            placeMedkit();
             break;
     }
 
@@ -464,13 +502,65 @@ void crossBridge() {
 }
 
 void navChute() {
-    if (getSharpVal(L_SHARP_PIN) > L_SHARP_CHUTE_THRESH) {
+    double l_sharp_val = getSharpVal(L_SHARP_PIN);
+    double r_sharp_val = getSharpVal(R_SHARP_PIN);
+
+    if (l_sharp_val > L_SHARP_CHUTE_THRESH) {
         drive.driveArcade(0.125, -0.3);
         delay(400);
-    } else if (getSharpVal(R_SHARP_PIN) > R_SHARP_CHUTE_THRESH) {
-        drive.driveArcade(0.125, 0.3);
+    } else if (r_sharp_val > R_SHARP_CHUTE_THRESH) {
+        drive.driveArcade(0.125, 0.325);
         delay(400);
     } else {
-        drive.driveArcade(0.3, 0);
+        drive.driveArcade(0.3, (r_sharp_val - l_sharp_val)*CHUTE_kP);
     }
+}
+
+void breachWall() {
+    // reset timer on first call
+    if (g_lastRobotMode != g_robotMode) {
+        g_breachDriveTimer.reset();
+    }
+
+    if (g_breachDriveTimer.hasElapsed(5)) {
+        drive.driveTank(0, 0);
+    } else {
+        drive.driveArcade(0.1, 0.0);
+    }
+}
+
+void navBucket() {
+    // main command: go to bridge light
+    goToLight(BRIDGE_START_THRESH);
+
+    // stop when near walls and go to next state
+    if (getSharpVal(M_SHARP_PIN) > SHARP_VAL_MAX) {
+        Serial.println("Autonomous completed!");
+        drive.driveTank(0, 0);
+        g_robotMode = PLACE_MEDKIT;
+    }
+}
+
+// experimenting with non-global timer structure as well
+void placeMedkit() {
+    // first, lower arm
+    long init_time_ms = millis();
+
+    while ((millis() - init_time_ms)/1000.0 < 1.0) {
+        updateRobotMode();
+        driveArmPct(-1.0);
+    }
+
+    driveArmPct(0.0);
+    init_time_ms = millis();
+
+    while ((millis() - init_time_ms)/1000.0 < 1.0) {
+        updateRobotMode();
+        drive.driveArcade(-0.3, 0.0);
+    }
+
+    drive.driveArcade(0.0, 0.0);
+
+    g_robotMode = AUTO_FINISHED;
+
 }
