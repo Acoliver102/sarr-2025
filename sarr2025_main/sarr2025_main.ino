@@ -234,6 +234,7 @@ enum RobotMode {
     BREACH_WALL = 5,
     NAV_BUCKET = 6,
     PLACE_MEDKIT = 7,
+    ALIGN_WALL = 8,
     AUTO_FINISHED = 99
 };
 
@@ -250,7 +251,7 @@ void updateRobotMode() {
         // if robot state is not an auto state, go to first auto state
         if ((g_robotMode == DISABLED) || (g_robotMode == TELEOP)) {
             // manual wall override
-            g_robotMode = BREACH_WALL;
+            g_robotMode = ALIGN_WALL;
         }
         digitalWrite(LED, HIGH);
     } else {
@@ -369,6 +370,7 @@ boolean Timer::hasElapsed(double seconds) {
 }
 
 // global timers
+Timer g_alignWallTimer;
 Timer g_bridgeDriveTimer;
 Timer g_breachDriveTimer;
 
@@ -477,6 +479,13 @@ void loop() {
 
             placeMedkit();
             break;
+        case 8:
+            #if (MODE_DEBUG == 1)
+            Serial.println("ALIGN_WALL")
+            #endif
+
+            alignWall();
+            break;
         case 99:
             #if (MODE_DEBUG == 1)
             Serial.println("AUTO_FINISHED");
@@ -556,6 +565,32 @@ void navChute() {
     } else {
         drive.driveArcade(0.3, (r_sharp_val - l_sharp_val)*CHUTE_kP);
     }
+}
+
+// line up wheel cleats with the wall before initiating climb
+void alignWall() {
+
+    double alignPct = 0.2;
+
+    // reset timer on first call and turn off drive
+    if (g_lastRobotMode != g_robotMode) {
+        g_alignWallTimer.reset();
+        drive.driveTank(0.0, 0.0);
+    }
+
+    // alternate between pulsing left and right wheels every 0.5 sec
+    bool wheel_pick = bool(int(g_alignWallTimer.secondsElapsed()/0.5)%2);
+    if (wheel_pick) {
+        drive.driveTank(0, alignPct);
+    } else {
+        drive.driveTank(alignPct, 0);
+    }
+
+    // after certain time, go to breachWall()
+    if (g_alignWallTimer.hasElapsed(3.0)) {
+        g_robotMode = BREACH_WALL;
+    }
+
 }
 
 void breachWall() {
