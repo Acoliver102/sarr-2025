@@ -5,7 +5,8 @@
 #define MODE_DEBUG 0
 #define DRIVE_DEBUG 0
 #define PHOTO_DEBUG 0
-#define SHARP_DEBUG 1
+#define SHARP_DEBUG 0
+#define RC_DEBUG 0
 
 // constants - receiver channels
 const int CH_1_PIN = 7;
@@ -52,12 +53,13 @@ const double L_TO_R_SCALE = 499.0/436.0; // empirical - tune out differences in 
 const int SHARP_VAL_MAX = 400; // max distance sensor value before stopping
 const int PHOTO_VAL_DIFF_TARGET = -50; // target sensor delta
 const int PHOTO_VAL_TARGET_THRESH = 50; // min difference to start driving forward 
-const int PHOTO_VAL_START_THRESH = -300; // intensity before starting homing
 const double PHOTO_STEER_kP = 0.3/150; // kP for steering controller
 
 // bridge auto segmaent
 const int BRIDGE_START_THRESH = -250; // intensity before starting homing
 const int BRIDGE_SHARP_MAX = 150; // max distance sensor readout before moving z
+
+const int BUCKET_START_THRESH = -350; // intensity before starting homing
 
 // chute nav constants
 const int L_SHARP_CHUTE_THRESH = 250;
@@ -99,8 +101,15 @@ double getSharpVal(int sharp_pin) {
     return total / 25.0;
 }
 
-int getRPhotoVal() {
-    int rPhotoVal = analogRead(R_PHOTO_PIN) - R_PHOTO_DEFAULT;
+double getRPhotoVal() {
+
+    double rPhotoVal = 0.0;
+
+    for (int i = 0; i < 25; i++) {
+        rPhotoVal = rPhotoVal + analogRead(R_PHOTO_PIN) - R_PHOTO_DEFAULT;
+    }
+
+    rPhotoVal = rPhotoVal/25.0;
 
     #if (PHOTO_DEBUG == 1)
     Serial.print("R Photo Val: ");
@@ -110,8 +119,14 @@ int getRPhotoVal() {
     return rPhotoVal;
 }
 
-int getLPhotoVal() {
-    int lPhotoVal = int(L_TO_R_SCALE*(analogRead(L_PHOTO_PIN) - L_PHOTO_DEFAULT));
+double getLPhotoVal() {
+    int lPhotoVal = 0;
+
+    for (int i = 0; i < 25; i++) {
+        lPhotoVal = lPhotoVal + L_TO_R_SCALE*(analogRead(L_PHOTO_PIN) - L_PHOTO_DEFAULT);
+    }
+
+    lPhotoVal = lPhotoVal/25.0;
 
     #if (PHOTO_DEBUG == 1)
     Serial.print("L Photo Val: ");
@@ -121,7 +136,7 @@ int getLPhotoVal() {
     return lPhotoVal;
 }
 
-int getPhotoValDifference() {
+double getPhotoValDifference() {
     return (getRPhotoVal() - getLPhotoVal());
 }
 
@@ -148,6 +163,17 @@ double getRStickYPct() {
 
 double getLStickXPct() {
     double rawValue = double(int(pulseIn(CH_4_PIN, HIGH, 21000)) - RC_IN_CENTER) / RC_IN_AMP;
+
+    if (abs(rawValue) < RC_DEADZONE_PCT) {
+        return 0.0;
+    }
+
+    return rawValue;
+}
+
+
+double getLStickYPct() {
+    double rawValue = double(int(pulseIn(CH_3_PIN, HIGH, 21000)) - RC_IN_CENTER) / RC_IN_AMP;
 
     if (abs(rawValue) < RC_DEADZONE_PCT) {
         return 0.0;
@@ -223,7 +249,8 @@ void updateRobotMode() {
     } else if (getRShoulderSwitchIn()) {
         // if robot state is not an auto state, go to first auto state
         if ((g_robotMode == DISABLED) || (g_robotMode == TELEOP)) {
-            g_robotMode = NAV_CHUTE;
+            // manual wall override
+            g_robotMode = BREACH_WALL;
         }
         digitalWrite(LED, HIGH);
     } else {
@@ -383,6 +410,10 @@ void setup() {
 
 void loop() {
     updateRobotMode();
+
+    #if (RC_DEBUG == 1)
+    printRC();
+    #endif
     
 
     switch (g_robotMode) {
@@ -446,6 +477,15 @@ void loop() {
 
             placeMedkit();
             break;
+        case 99:
+            #if (MODE_DEBUG == 1)
+            Serial.println("AUTO_FINISHED");
+            #endif
+
+            // turn off chassis and arm
+            drive.driveTank(0, 0);
+            driveArmPct(0.0);
+            break;
     }
 
     // after handling action update last robot mode for logic
@@ -460,16 +500,18 @@ void teleop() {
 
 // helper function to handle navigate to light tasks
 void goToLight(int start_thresh) {
+    Serial.println(start_thresh);
     if (getRPhotoVal() > start_thresh) {
         // slow turn to find target
-        drive.driveArcade(0, 0.3);
+        drive.driveArcade(0, 0.5);
+        Serial.println("turning");
     } else {
         // drive towards target, proportional turn
         int error = getPhotoValDifference() - PHOTO_VAL_DIFF_TARGET;
         if (abs(error) > PHOTO_VAL_TARGET_THRESH) {
             drive.driveArcade(0, PHOTO_STEER_kP * error);
         } else {
-            drive.driveArcade(0.3, PHOTO_STEER_kP * error);
+            drive.driveArcade(0.5, PHOTO_STEER_kP * error);
         }
     }
 }
@@ -517,21 +559,30 @@ void navChute() {
 }
 
 void breachWall() {
+
+    double breachTimeS = 10;
+
     // reset timer on first call
     if (g_lastRobotMode != g_robotMode) {
         g_breachDriveTimer.reset();
     }
 
-    if (g_breachDriveTimer.hasElapsed(5)) {
+    // if timer up go to nav_bucket
+    if (g_breachDriveTimer.hasElapsed(breachTimeS + 0.5)) {
         drive.driveTank(0, 0);
+        g_robotMode = NAV_BUCKET;
+    } else if (g_breachDriveTimer.hasElapsed(breachTimeS)) {
+        drive.driveArcade(0.3, 0.0);
+        driveArmPct(0);
     } else {
-        drive.driveArcade(0.1, 0.0);
+        drive.driveArcade(0.25, 0.0);
+        driveArmPct(0.05);
     }
 }
 
 void navBucket() {
     // main command: go to bridge light
-    goToLight(BRIDGE_START_THRESH);
+    goToLight(BUCKET_START_THRESH);
 
     // stop when near walls and go to next state
     if (getSharpVal(M_SHARP_PIN) > SHARP_VAL_MAX) {
@@ -543,20 +594,43 @@ void navBucket() {
 
 // experimenting with non-global timer structure as well
 void placeMedkit() {
+
+    // force robotMode at start
+    g_robotMode = PLACE_MEDKIT;
+
     // first, lower arm
     long init_time_ms = millis();
+    drive.driveArcade(0.0, 0.0);
 
-    while ((millis() - init_time_ms)/1000.0 < 1.0) {
+    while ((millis() - init_time_ms)/1000.0 < 1.5) {
         updateRobotMode();
+        if (g_robotMode != PLACE_MEDKIT) {
+            break;
+        }
+
         driveArmPct(-1.0);
     }
 
     driveArmPct(0.0);
     init_time_ms = millis();
 
+    // pause for 1 second
     while ((millis() - init_time_ms)/1000.0 < 1.0) {
         updateRobotMode();
-        drive.driveArcade(-0.3, 0.0);
+        if (g_robotMode != PLACE_MEDKIT) {
+            break;
+        }
+    }
+
+    init_time_ms = millis();
+
+    // back up slowly
+    while ((millis() - init_time_ms)/1000.0 < 2.0) {
+        updateRobotMode();
+        if (g_robotMode != PLACE_MEDKIT) {
+            break;
+        }
+        drive.driveArcade(-0.35, 0.0);
     }
 
     drive.driveArcade(0.0, 0.0);
