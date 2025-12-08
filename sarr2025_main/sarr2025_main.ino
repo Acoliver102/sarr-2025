@@ -48,32 +48,37 @@ const int R_SHARP_PIN = A9;  // Sharp Sensor
 const int LED = 13;       // Onboard LED location
 
 // constants - CdS Photosensor Tuning
-const int L_PHOTO_DEFAULT = 457;
-const int R_PHOTO_DEFAULT = 514;
-const double L_TO_R_SCALE = 499.0/436.0; // empirical - tune out differences in voltage dividers
+const int L_PHOTO_DEFAULT = 295;
+const int R_PHOTO_DEFAULT = 980;
+const double R_SCALE = 9.0/70.0;
+const double L_TO_R_SCALE = 1.0; // empirical - tune out differences in voltage dividers
 
 // linear interp tree settings - DATA VECTORS MUST BE ASCENDING, SAME SIZE
-const vector<double> L_DATA = {-470, -400, -329, -290, -163, -32};
-const vector<double> R_DATA = {-470, -455, -405, -394, -282, 111};
+const vector<double> L_DATA = {-190, -130, -115, -104, -90, 0};
+const vector<double> R_DATA = {-112, -105, -100, -96, -90, 0};
 const bool USE_INTERP = true;
 
 // auton parameter constants
 const int BRIDGE_SHARP_VAL = 250;
-const int SHARP_VAL_MAX = 400; // max distance sensor value before stopping
+const int SHARP_VAL_MAX = 330; // max distance sensor value before stopping
 const int PHOTO_VAL_DIFF_TARGET = 0; // target sensor delta
 const int PHOTO_VAL_TARGET_THRESH = 25; // min difference to start driving forward 
-const double PHOTO_STEER_kP = 0.75/150; // kP for steering controller
+const double PHOTO_STEER_kP = 1.5/150; // kP for steering controller
 
 // bridge auto segmaent
-const int BRIDGE_START_THRESH = -350; // intensity before starting homing
-const int BRIDGE_SHARP_MAX = 150; // max distance sensor readout before moving z
+const int BRIDGE_START_THRESH = -85; // intensity before starting homing
 
-const int BUCKET_START_THRESH = -350; // intensity before starting homing
+const int BUCKET_START_THRESH = -85; // intensity before starting homing
+const int BUCKET_SHARP_MAX = 350;
 
 // chute nav constants
 const int L_SHARP_CHUTE_THRESH = 250;
-const int R_SHARP_CHUTE_THRESH = 210;
+const int R_SHARP_CHUTE_THRESH = 250;
 const double CHUTE_kP = 0.00025;
+
+// logic for clearing the wall
+bool g_floorSeen = false;
+const int M_SHARP_CLEAR_THRESH = 140;
 
 Servo g_armServo;
 
@@ -152,7 +157,7 @@ double getRPhotoVal() {
     double rPhotoVal = 0.0;
 
     for (int i = 0; i < 25; i++) {
-        rPhotoVal = rPhotoVal + analogRead(R_PHOTO_PIN) - R_PHOTO_DEFAULT;
+        rPhotoVal = rPhotoVal + (analogRead(R_PHOTO_PIN) - R_PHOTO_DEFAULT)*R_SCALE;
     }
 
     rPhotoVal = rPhotoVal/25.0;
@@ -166,7 +171,7 @@ double getRPhotoVal() {
 }
 
 double getLPhotoVal() {
-    int lPhotoVal = 0;
+    double lPhotoVal = 0;
 
     for (int i = 0; i < 25; i++) {
         lPhotoVal = lPhotoVal + L_TO_R_SCALE*(analogRead(L_PHOTO_PIN) - L_PHOTO_DEFAULT);
@@ -630,8 +635,9 @@ void crossBridge() {
 
     if (g_bridgeDriveTimer.hasElapsed(8)) {
         drive.driveTank(0, 0);
+        g_robotMode = NAV_CHUTE;
     } else {
-        drive.driveTank(0.34, 0.3);
+        drive.driveTank(0.3, 0.3175);
     }
 
 }
@@ -639,6 +645,13 @@ void crossBridge() {
 void navChute() {
     double l_sharp_val = getSharpVal(L_SHARP_PIN);
     double r_sharp_val = getSharpVal(R_SHARP_PIN);
+
+    // stop when near walls and go to next state
+    if (getSharpVal(M_SHARP_PIN) > SHARP_VAL_MAX) {
+        drive.driveTank(0, 0);
+        g_robotMode = ALIGN_WALL;
+        return;
+    }
 
     if (l_sharp_val > L_SHARP_CHUTE_THRESH) {
         drive.driveArcade(0.125, -0.3);
@@ -650,18 +663,13 @@ void navChute() {
         drive.driveArcade(0.3, (r_sharp_val - l_sharp_val)*CHUTE_kP);
     }
 
-    // stop when near walls and go to next state
-    if (getSharpVal(M_SHARP_PIN) > SHARP_VAL_MAX) {
-        drive.driveTank(0, 0);
-        g_robotMode = ALIGN_WALL;
-    }
 
 }
 
 // line up wheel cleats with the wall before initiating climb
 void alignWall() {
 
-    double alignPct = 0.24;
+    double alignPct = 0.26;
 
     // reset timer on first call and turn off drive
     if (g_lastRobotMode != g_robotMode) {
@@ -672,13 +680,13 @@ void alignWall() {
     // alternate between pulsing left and right wheels every 0.5 sec
     bool wheel_pick = bool(int(g_alignWallTimer.secondsElapsed()/0.5)%2);
     if (wheel_pick) {
-        drive.driveTank(0, alignPct);
+        drive.driveTank(-alignPct/4.0, alignPct);
     } else {
-        drive.driveTank(alignPct, 0);
+        drive.driveTank(alignPct, -alignPct/4.0);
     }
 
     // after certain time, go to breachWall()
-    if (g_alignWallTimer.hasElapsed(3.0)) {
+    if (g_alignWallTimer.hasElapsed(5.0)) {
         g_robotMode = BREACH_WALL;
     }
 
@@ -686,21 +694,19 @@ void alignWall() {
 
 void breachWall() {
 
-    double breachTimeS = 10;
 
-    // reset timer on first call
+    double breachTimeS = 12;
+
+    // reset timer on first call and fix flags
     if (g_lastRobotMode != g_robotMode) {
         Serial.println("RESET");
         g_breachDriveTimer.reset();
     }
 
     // if timer up go to nav_bucket
-    if (g_breachDriveTimer.hasElapsed(breachTimeS + 0.5)) {
+    if (g_breachDriveTimer.hasElapsed(breachTimeS)) {
         drive.driveTank(0, 0);
         g_robotMode = NAV_BUCKET;
-    } else if (g_breachDriveTimer.hasElapsed(breachTimeS)) {
-        drive.driveArcade(0.3, 0.0);
-        driveArmPct(0);
     } else {
         drive.driveArcade(0.25, 0.0);
         driveArmPct(0.05);
@@ -712,7 +718,7 @@ void navBucket() {
     goToLight(BUCKET_START_THRESH);
 
     // stop when near walls and go to next state
-    if (getSharpVal(M_SHARP_PIN) > SHARP_VAL_MAX) {
+    if (getSharpVal(M_SHARP_PIN) > BUCKET_SHARP_MAX) {
         Serial.println("Autonomous completed!");
         drive.driveTank(0, 0);
         g_robotMode = PLACE_MEDKIT;
