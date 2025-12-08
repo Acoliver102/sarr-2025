@@ -1,12 +1,15 @@
 // import servo library for PWM control
 #include <Servo.h>
+#include <vector>
 
 // debug flags
 #define MODE_DEBUG 0
 #define DRIVE_DEBUG 0
-#define PHOTO_DEBUG 0
+#define PHOTO_DEBUG 1
 #define SHARP_DEBUG 0
 #define RC_DEBUG 0
+
+using std::vector;
 
 // constants - receiver channels
 const int CH_1_PIN = 7;
@@ -49,14 +52,20 @@ const int L_PHOTO_DEFAULT = 457;
 const int R_PHOTO_DEFAULT = 514;
 const double L_TO_R_SCALE = 499.0/436.0; // empirical - tune out differences in voltage dividers
 
+// linear interp tree settings - DATA VECTORS MUST BE ASCENDING, SAME SIZE
+const vector<double> L_DATA = {-470, -400, -329, -290, -163, -32};
+const vector<double> R_DATA = {-470, -455, -405, -394, -282, 111};
+const bool USE_INTERP = true;
+
 // auton parameter constants
+const int BRIDGE_SHARP_VAL = 250;
 const int SHARP_VAL_MAX = 400; // max distance sensor value before stopping
-const int PHOTO_VAL_DIFF_TARGET = -50; // target sensor delta
-const int PHOTO_VAL_TARGET_THRESH = 50; // min difference to start driving forward 
-const double PHOTO_STEER_kP = 0.3/150; // kP for steering controller
+const int PHOTO_VAL_DIFF_TARGET = 0; // target sensor delta
+const int PHOTO_VAL_TARGET_THRESH = 25; // min difference to start driving forward 
+const double PHOTO_STEER_kP = 0.75/150; // kP for steering controller
 
 // bridge auto segmaent
-const int BRIDGE_START_THRESH = -250; // intensity before starting homing
+const int BRIDGE_START_THRESH = -350; // intensity before starting homing
 const int BRIDGE_SHARP_MAX = 150; // max distance sensor readout before moving z
 
 const int BUCKET_START_THRESH = -350; // intensity before starting homing
@@ -81,6 +90,43 @@ double clamp(double in, double min, double max) {
         return max;
     }
     return in;
+}
+
+// map from one set of nonlinear data to another w. interpolating tree
+// VERY IMPORTANT: ONLY WORKS IF BOTH DATASETS ARE ASCENDING AND OF EQUAL SIZE
+double interpTree(double value, vector<double> from_data, vector<double> to_data) {
+    // number of brackets value can fall into
+    int num_brackets = from_data.size() - 1;
+
+    double from_upper;
+    double from_lower;
+
+    double to_upper;
+    double to_lower;
+
+    // check all brackets within dataset
+    for (int i = 0; i < num_brackets - 1; i++) {
+
+        from_lower = from_data[i];
+        from_upper = from_data[i+1];
+
+        to_lower = to_data[i];
+        to_upper = to_data[i+1];
+
+        if (value < from_upper) {
+            return ((value - from_lower)/(from_upper - from_lower))*(to_upper - to_lower) + to_lower;
+        }
+    }
+
+    // if not returned yet value is greater than largest mapped value, so extend that bracket
+    from_lower = from_data[num_brackets - 1];
+    from_upper = from_data[num_brackets];
+
+    to_lower = to_data[num_brackets - 1];
+    to_upper = to_data[num_brackets];
+
+    return ((value - from_lower)/(from_upper - from_lower))*(to_upper - to_lower) + to_lower;
+
 }
 
 // rolling avg sharp sensor readout - from Brian
@@ -127,6 +173,10 @@ double getLPhotoVal() {
     }
 
     lPhotoVal = lPhotoVal/25.0;
+
+    if (USE_INTERP) {
+        lPhotoVal = interpTree(lPhotoVal, L_DATA, R_DATA);
+    }
 
     #if (PHOTO_DEBUG == 1)
     Serial.print("L Photo Val: ");
@@ -251,7 +301,7 @@ void updateRobotMode() {
         // if robot state is not an auto state, go to first auto state
         if ((g_robotMode == DISABLED) || (g_robotMode == TELEOP)) {
             // manual wall override
-            g_robotMode = ALIGN_WALL;
+            g_robotMode = NAV_BRIDGE_LIGHT;
         }
         digitalWrite(LED, HIGH);
     } else {
@@ -413,10 +463,16 @@ void setup() {
 void loop() {
     updateRobotMode();
 
+    getPhotoValDifference();
+
     #if (RC_DEBUG == 1)
     printRC();
     #endif
     
+    #if (MODE_DEBUG == 1)
+    Serial.print("LAST ROBOT MODE: ");
+    Serial.println(g_lastRobotMode);
+    #endif
 
     switch (g_robotMode) {
         case 0: // DISABLED
@@ -427,6 +483,9 @@ void loop() {
             // turn off chassis and arm
             drive.driveTank(0, 0);
             driveArmPct(0.0);
+
+            // track last robot mode for logic
+            g_lastRobotMode = DISABLED;
             break;
         case 1: // TELEOP
             #if (MODE_DEBUG == 1)
@@ -436,6 +495,8 @@ void loop() {
             // teleop main loop
             teleop();
 
+            // track last robot mode for logic
+            g_lastRobotMode = TELEOP;
             break;
         case 2: // NAV_BRIDGE_LIGHT
             #if (MODE_DEBUG == 1)
@@ -443,6 +504,9 @@ void loop() {
             #endif
 
             navBridgeLight();
+
+            // track last robot mode for logic
+            g_lastRobotMode = NAV_BRIDGE_LIGHT;
             break;
         case 3: // CROSS_BRIDGE
             #if (MODE_DEBUG == 1)
@@ -450,6 +514,9 @@ void loop() {
             #endif
 
             crossBridge();
+
+            // track last robot mode for logic
+            g_lastRobotMode = CROSS_BRIDGE;
             break;
         case 4: // NAV_CHUTE
             #if (MODE_DEBUG == 1)
@@ -457,6 +524,9 @@ void loop() {
             #endif
 
             navChute();
+
+            // track last robot mode for logic
+            g_lastRobotMode = NAV_CHUTE;
             break;
         case 5:
             #if (MODE_DEBUG == 1)
@@ -464,6 +534,9 @@ void loop() {
             #endif
 
             breachWall();
+
+            // track last robot mode for logic
+            g_lastRobotMode = BREACH_WALL;
             break;
         case 6:
             #if (MODE_DEBUG == 1)
@@ -471,6 +544,9 @@ void loop() {
             #endif
 
             navBucket();
+
+            // track last robot mode for logic
+            g_lastRobotMode = NAV_BUCKET;
             break;
         case 7:
             #if (MODE_DEBUG == 1)
@@ -478,13 +554,19 @@ void loop() {
             #endif
 
             placeMedkit();
+
+            // track last robot mode for logic
+            g_lastRobotMode = PLACE_MEDKIT;
             break;
         case 8:
             #if (MODE_DEBUG == 1)
-            Serial.println("ALIGN_WALL")
+            Serial.println("ALIGN_WALL");
             #endif
 
             alignWall();
+
+            // track last robot mode for logic
+            g_lastRobotMode = ALIGN_WALL;
             break;
         case 99:
             #if (MODE_DEBUG == 1)
@@ -494,11 +576,13 @@ void loop() {
             // turn off chassis and arm
             drive.driveTank(0, 0);
             driveArmPct(0.0);
+
+            // track last robot mode for logic
+            g_lastRobotMode = AUTO_FINISHED;
             break;
     }
 
-    // after handling action update last robot mode for logic
-    g_lastRobotMode = g_robotMode;
+    
 
 }
 
@@ -509,18 +593,19 @@ void teleop() {
 
 // helper function to handle navigate to light tasks
 void goToLight(int start_thresh) {
-    Serial.println(start_thresh);
+
+    double turnMax = 0.375;
+
     if (getRPhotoVal() > start_thresh) {
         // slow turn to find target
-        drive.driveArcade(0, 0.5);
-        Serial.println("turning");
+        drive.driveArcade(0, turnMax);
     } else {
         // drive towards target, proportional turn
         int error = getPhotoValDifference() - PHOTO_VAL_DIFF_TARGET;
         if (abs(error) > PHOTO_VAL_TARGET_THRESH) {
-            drive.driveArcade(0, PHOTO_STEER_kP * error);
+            drive.driveArcade(0, clamp(PHOTO_STEER_kP * error, -turnMax, turnMax));
         } else {
-            drive.driveArcade(0.5, PHOTO_STEER_kP * error);
+            drive.driveArcade(0.4, clamp(PHOTO_STEER_kP * error, -turnMax, turnMax));
         }
     }
 }
@@ -529,13 +614,12 @@ void navBridgeLight() {
     // main command: go to bridge light
     goToLight(BRIDGE_START_THRESH);
 
-    // // stop when near walls and go to next state
-    // if (getSharpVal(L_SHARP_PIN) + getSharpVal(R_SHARP_PIN) > SHARP_VAL_MAX) {
-    //     Serial.println("Autonomous completed!");
-    //     drive.driveTank(0, 0);
-    //     g_robotMode = DISABLED;
-    //     delay(5000);
-    // }
+    // stop when near walls and go to next state
+    if (getSharpVal(M_SHARP_PIN) > BRIDGE_SHARP_VAL) {
+        Serial.println("Autonomous completed!");
+        drive.driveTank(0, 0);
+        g_robotMode = CROSS_BRIDGE;
+    }
 }
 
 void crossBridge() {
@@ -544,10 +628,10 @@ void crossBridge() {
         g_bridgeDriveTimer.reset();
     }
 
-    if (g_bridgeDriveTimer.hasElapsed(3)) {
+    if (g_bridgeDriveTimer.hasElapsed(8)) {
         drive.driveTank(0, 0);
     } else {
-        drive.driveArcade(0.5, 0.0);
+        drive.driveTank(0.34, 0.3);
     }
 
 }
@@ -565,12 +649,19 @@ void navChute() {
     } else {
         drive.driveArcade(0.3, (r_sharp_val - l_sharp_val)*CHUTE_kP);
     }
+
+    // stop when near walls and go to next state
+    if (getSharpVal(M_SHARP_PIN) > SHARP_VAL_MAX) {
+        drive.driveTank(0, 0);
+        g_robotMode = ALIGN_WALL;
+    }
+
 }
 
 // line up wheel cleats with the wall before initiating climb
 void alignWall() {
 
-    double alignPct = 0.2;
+    double alignPct = 0.24;
 
     // reset timer on first call and turn off drive
     if (g_lastRobotMode != g_robotMode) {
@@ -599,6 +690,7 @@ void breachWall() {
 
     // reset timer on first call
     if (g_lastRobotMode != g_robotMode) {
+        Serial.println("RESET");
         g_breachDriveTimer.reset();
     }
 
