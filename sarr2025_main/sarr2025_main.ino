@@ -50,30 +50,30 @@ const int LED = 13;       // Onboard LED location
 // constants - CdS Photosensor Tuning
 const int L_PHOTO_DEFAULT = 295;
 const int R_PHOTO_DEFAULT = 980;
-const double R_SCALE = 9.0/70.0;
+const double R_SCALE = 1.0;
 const double L_TO_R_SCALE = 1.0; // empirical - tune out differences in voltage dividers
 
 // linear interp tree settings - DATA VECTORS MUST BE ASCENDING, SAME SIZE
-const vector<double> L_DATA = {-190, -130, -115, -104, -90, 0};
-const vector<double> R_DATA = {-112, -105, -100, -96, -90, 0};
+const vector<double> L_DATA = {-135, -87, -70, -60, -50, -44, -25, 0};
+const vector<double> R_DATA = {-870, -823, -756, -710, -677, -640, -460, 0};
 const bool USE_INTERP = true;
 
 // auton parameter constants
-const int BRIDGE_SHARP_VAL = 250;
-const int SHARP_VAL_MAX = 330; // max distance sensor value before stopping
+const int BRIDGE_SHARP_VAL = 240;
+const int SHARP_VAL_MAX = 305; // max distance sensor value before stopping
 const int PHOTO_VAL_DIFF_TARGET = 0; // target sensor delta
-const int PHOTO_VAL_TARGET_THRESH = 25; // min difference to start driving forward 
-const double PHOTO_STEER_kP = 1.5/150; // kP for steering controller
+const int PHOTO_VAL_TARGET_THRESH = 95; // min difference to start driving forward 
+const double PHOTO_STEER_kP = 0.135/150; // kP for steering controller
 
 // bridge auto segmaent
-const int BRIDGE_START_THRESH = -85; // intensity before starting homing
+const int BRIDGE_START_THRESH = -600; // intensity before starting homing
 
-const int BUCKET_START_THRESH = -85; // intensity before starting homing
-const int BUCKET_SHARP_MAX = 350;
+const int BUCKET_START_THRESH = -600; // intensity before starting homing
+const int BUCKET_SHARP_MAX = 420;
 
 // chute nav constants
-const int L_SHARP_CHUTE_THRESH = 250;
-const int R_SHARP_CHUTE_THRESH = 250;
+const int L_SHARP_CHUTE_THRESH = 300;
+const int R_SHARP_CHUTE_THRESH = 260;
 const double CHUTE_kP = 0.00025;
 
 // logic for clearing the wall
@@ -469,6 +469,7 @@ void loop() {
     updateRobotMode();
 
     getPhotoValDifference();
+    // getLPhotoVal();
 
     #if (RC_DEBUG == 1)
     printRC();
@@ -599,11 +600,11 @@ void teleop() {
 // helper function to handle navigate to light tasks
 void goToLight(int start_thresh) {
 
-    double turnMax = 0.375;
+    double turnMax = 0.325;
 
     if (getRPhotoVal() > start_thresh) {
         // slow turn to find target
-        drive.driveArcade(0, turnMax);
+        drive.driveArcade(0, turnMax*1.2);
     } else {
         // drive towards target, proportional turn
         int error = getPhotoValDifference() - PHOTO_VAL_DIFF_TARGET;
@@ -622,7 +623,6 @@ void navBridgeLight() {
     // stop when near walls and go to next state
     if (getSharpVal(M_SHARP_PIN) > BRIDGE_SHARP_VAL) {
         Serial.println("Autonomous completed!");
-        drive.driveTank(0, 0);
         g_robotMode = CROSS_BRIDGE;
     }
 }
@@ -633,11 +633,11 @@ void crossBridge() {
         g_bridgeDriveTimer.reset();
     }
 
-    if (g_bridgeDriveTimer.hasElapsed(8)) {
+    if (g_bridgeDriveTimer.hasElapsed(9.5)) {
         drive.driveTank(0, 0);
         g_robotMode = NAV_CHUTE;
     } else {
-        drive.driveTank(0.3, 0.3175);
+        drive.driveTank(0.3, 0.3);
     }
 
 }
