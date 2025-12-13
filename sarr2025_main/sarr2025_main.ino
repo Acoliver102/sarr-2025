@@ -1,6 +1,11 @@
 // import servo library for PWM control
 #include <Servo.h>
 #include <vector>
+// libraries for BNO055 sensor
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BNO055.h>
+#include <utility/imumaths.h>
 
 // debug flags
 #define MODE_DEBUG 0
@@ -8,6 +13,7 @@
 #define PHOTO_DEBUG 1
 #define SHARP_DEBUG 0
 #define RC_DEBUG 0
+#define GYRO_DEBUG 0
 
 using std::vector;
 
@@ -63,10 +69,12 @@ const int BRIDGE_SHARP_VAL = 240;
 const int SHARP_VAL_MAX = 305; // max distance sensor value before stopping
 const int PHOTO_VAL_DIFF_TARGET = 0; // target sensor delta
 const int PHOTO_VAL_TARGET_THRESH = 95; // min difference to start driving forward 
-const double PHOTO_STEER_kP = 0.135/150; // kP for steering controller
+const double PHOTO_STEER_kP = 0.2/150; // kP for steering controller
+
+const double GYRO_kP = 0.02;
 
 // bridge auto segmaent
-const int BRIDGE_START_THRESH = -600; // intensity before starting homing
+const int BRIDGE_START_THRESH = -500; // intensity before starting homing
 
 const int BUCKET_START_THRESH = -600; // intensity before starting homing
 const int BUCKET_SHARP_MAX = 420;
@@ -80,7 +88,9 @@ const double CHUTE_kP = 0.00025;
 bool g_floorSeen = false;
 const int M_SHARP_CLEAR_THRESH = 140;
 
+// extra motors and sensors
 Servo g_armServo;
+Adafruit_BNO055 bno = Adafruit_BNO055(55);
 
 // **************************************************************************
 // HELPER FUNCTIONS
@@ -244,6 +254,21 @@ bool getLShoulderSwitchIn() {
 
 bool getRShoulderSwitchIn() {
     return (pulseIn(CH_5_PIN, HIGH, 21000) > 1600);
+}
+
+// return yaw degrees, clockwise positive
+double getGyroX() {
+    /* Get a new sensor event */ 
+    sensors_event_t event; 
+    bno.getEvent(&event);
+
+    #if (GYRO_DEBUG == 1)
+    Serial.print("Gyro X Value (deg): ");
+    Serial.println(event.orientation.x);
+    #endif
+
+    // return x value
+    return event.orientation.x;
 }
 
 // controller debug helper
@@ -454,6 +479,18 @@ void setup() {
     // init arm
     g_armServo.attach(ARM_SERVO_PIN);
 
+    /* Initialise the gyro sensor */
+    if(!bno.begin())
+    {
+        /* There was a problem detecting the BNO055 ... check your connections */
+        Serial.print("Ooops, no BNO055 detected ... Check your wiring or I2C ADDR!");
+        while(1);
+    }
+    
+    delay(1000);
+    
+    bno.setExtCrystalUse(true);
+
     //Flash the LED on and Off 10x before entering main loop
     for (int i = 0; i < 10; i++) {
         digitalWrite(13, HIGH);
@@ -470,6 +507,8 @@ void loop() {
 
     getPhotoValDifference();
     // getLPhotoVal();
+
+    // getGyroX();
 
     #if (RC_DEBUG == 1)
     printRC();
@@ -637,7 +676,7 @@ void crossBridge() {
         drive.driveTank(0, 0);
         g_robotMode = NAV_CHUTE;
     } else {
-        drive.driveTank(0.3, 0.3);
+        drive.driveArcade(0.3, GYRO_kP*(getGyroX() - 180.0));
     }
 
 }
