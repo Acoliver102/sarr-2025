@@ -65,8 +65,8 @@ const vector<double> R_DATA = {-870, -823, -756, -710, -677, -640, -460, 0};
 const bool USE_INTERP = true;
 
 // auton parameter constants
-const int BRIDGE_SHARP_VAL = 240;
-const int SHARP_VAL_MAX = 305; // max distance sensor value before stopping
+const int BRIDGE_SHARP_VAL = 355;
+const int SHARP_VAL_MAX = 325; // max distance sensor value before stopping
 const int PHOTO_VAL_DIFF_TARGET = 0; // target sensor delta
 const int PHOTO_VAL_TARGET_THRESH = 95; // min difference to start driving forward 
 const double PHOTO_STEER_kP = 0.2/150; // kP for steering controller
@@ -74,7 +74,7 @@ const double PHOTO_STEER_kP = 0.2/150; // kP for steering controller
 const double GYRO_kP = 0.02;
 
 // bridge auto segmaent
-const int BRIDGE_START_THRESH = -500; // intensity before starting homing
+const int BRIDGE_START_THRESH = -475; // intensity before starting homing
 
 const int BUCKET_START_THRESH = -600; // intensity before starting homing
 const int BUCKET_SHARP_MAX = 420;
@@ -450,6 +450,7 @@ boolean Timer::hasElapsed(double seconds) {
 }
 
 // global timers
+Timer g_goToBridgeTimer;
 Timer g_alignWallTimer;
 Timer g_bridgeDriveTimer;
 Timer g_breachDriveTimer;
@@ -505,7 +506,8 @@ void setup() {
 void loop() {
     updateRobotMode();
 
-    getPhotoValDifference();
+    Serial.print("M Sharp: "); Serial.println(getSharpVal(M_SHARP_PIN));
+    // getPhotoValDifference();
     // getLPhotoVal();
 
     // getGyroX();
@@ -643,7 +645,7 @@ void goToLight(int start_thresh) {
 
     if (getRPhotoVal() > start_thresh) {
         // slow turn to find target
-        drive.driveArcade(0, turnMax*1.2);
+        drive.driveArcade(0, -turnMax*1.2);
     } else {
         // drive towards target, proportional turn
         int error = getPhotoValDifference() - PHOTO_VAL_DIFF_TARGET;
@@ -656,11 +658,18 @@ void goToLight(int start_thresh) {
 }
 
 void navBridgeLight() {
+
+    // reset timer on first call
+    if (g_lastRobotMode != g_robotMode) {
+        g_goToBridgeTimer.reset();
+    }
+
     // main command: go to bridge light
     goToLight(BRIDGE_START_THRESH);
+    
 
     // stop when near walls and go to next state
-    if (getSharpVal(M_SHARP_PIN) > BRIDGE_SHARP_VAL) {
+    if (g_goToBridgeTimer.hasElapsed(4.0)) {
         Serial.println("Autonomous completed!");
         g_robotMode = CROSS_BRIDGE;
     }
@@ -672,7 +681,7 @@ void crossBridge() {
         g_bridgeDriveTimer.reset();
     }
 
-    if (g_bridgeDriveTimer.hasElapsed(9.5)) {
+    if (g_bridgeDriveTimer.hasElapsed(10.5)) {
         drive.driveTank(0, 0);
         g_robotMode = NAV_CHUTE;
     } else {
